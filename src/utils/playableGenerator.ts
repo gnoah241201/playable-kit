@@ -1,5 +1,3 @@
-import { PlayableConfig, ORIGINAL_IOS_URL, ORIGINAL_ANDROID_URL } from '../types';
-
 export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -13,42 +11,10 @@ export function slugifyTitle(title: string): string {
   const clean = title
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
   return clean || 'playable_game';
-}
-
-export function cleanInjectedScripts(html: string): string {
-  return html
-    // Remove AI Studio iframe injection script
-    .replace(/<script\b[^>]*aistudio-iframe[^>]*>[\s\S]*?<\/script>/gi, '')
-    // Remove Vite client injection script if any
-    .replace(/<script\b[^>]*@vite\/client[^>]*>[\s\S]*?<\/script>/gi, '')
-    // Fix extra closing brace if present
-    .replace(/send\(t\)\{\/\* analytics disabled \*\/\}\}\}/g, 'send(t){/* analytics disabled */}}');
-}
-
-export function generatePlayableHtml(rawTemplate: string, config: PlayableConfig): string {
-  let output = cleanInjectedScripts(rawTemplate);
-
-  // 1. Replace <title>
-  const cleanTitle = config.gameTitle.trim() || 'Playable Game';
-  output = output.replace(/<title>.*?<\/title>/i, `<title>${escapeHtml(cleanTitle)}</title>`);
-
-  // 2. Replace iOS URL
-  const iosTarget = config.syncLinks
-    ? (config.iosStoreUrl.trim() || ORIGINAL_IOS_URL)
-    : (config.iosStoreUrl.trim() || ORIGINAL_IOS_URL);
-  
-  const androidTarget = config.syncLinks
-    ? (config.iosStoreUrl.trim() || ORIGINAL_ANDROID_URL)
-    : (config.androidStoreUrl.trim() || ORIGINAL_ANDROID_URL);
-
-  output = output.replaceAll(ORIGINAL_IOS_URL, iosTarget);
-  output = output.replaceAll(ORIGINAL_ANDROID_URL, androidTarget);
-
-  return output;
 }
 
 export function generateAppLovinJs(cleanHtml: string): string {
@@ -76,8 +42,8 @@ export function generateAppLovinHtml(cleanHtml: string, title: string): string {
 </html>`;
 }
 
-export function triggerDownload(content: string, filename: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
+export function triggerDownload(content: string | Uint8Array, filename: string, mimeType: string) {
+  const blob = new Blob([content as BlobPart], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -85,5 +51,5 @@ export function triggerDownload(content: string, filename: string, mimeType: str
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -15,12 +15,14 @@ import {
   Layers,
   ArrowRight
 } from 'lucide-react';
-import { PlayableConfig, DEFAULT_CONFIG } from '../types';
+import { PlayableConfig } from '../types';
 
 interface ConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: PlayableConfig;
+  original: PlayableConfig;
+  analyticsEnabled: boolean | null;
   onSave: (newConfig: PlayableConfig) => void;
 }
 
@@ -28,6 +30,8 @@ export default function ConfigModal({
   isOpen,
   onClose,
   config,
+  original,
+  analyticsEnabled,
   onSave,
 }: ConfigModalProps) {
   const [formConfig, setFormConfig] = useState<PlayableConfig>(config);
@@ -57,32 +61,7 @@ export default function ConfigModal({
   };
 
   const handleResetToDefault = () => {
-    setFormConfig(DEFAULT_CONFIG);
-  };
-
-  const handleApplyPreset = (preset: 'appsflyer' | 'adjust' | 'blank') => {
-    if (preset === 'appsflyer') {
-      setFormConfig({
-        ...formConfig,
-        syncLinks: true,
-        iosStoreUrl: 'https://app.appsflyer.com/id1664415775?pid=marketing&c=playable_ad',
-        androidStoreUrl: 'https://app.appsflyer.com/com.matryoshka.royal.cooking.kitchen.madness?pid=marketing&c=playable_ad',
-      });
-    } else if (preset === 'adjust') {
-      setFormConfig({
-        ...formConfig,
-        syncLinks: true,
-        iosStoreUrl: 'https://app.adjust.com/abc1234?campaign=playable_ad',
-        androidStoreUrl: 'https://app.adjust.com/abc1234?campaign=playable_ad',
-      });
-    } else if (preset === 'blank') {
-      setFormConfig({
-        gameTitle: '',
-        iosStoreUrl: '',
-        androidStoreUrl: '',
-        syncLinks: false,
-      });
-    }
+    setFormConfig(original);
   };
 
   return (
@@ -117,12 +96,14 @@ export default function ConfigModal({
 
         {/* Body Content */}
         <form onSubmit={handleSave} className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
-          {/* Tracking Notification Banner */}
-          <div className="flex items-start gap-2.5 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-emerald-800">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          {/* Analytics status (from inspect) */}
+          <div className={`flex items-start gap-2.5 rounded-xl p-3 border ${analyticsEnabled ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+            <ShieldCheck className={`w-4 h-4 shrink-0 mt-0.5 ${analyticsEnabled ? 'text-rose-600' : 'text-emerald-600'}`} />
             <div className="text-[11px] leading-relaxed">
-              <span className="font-semibold text-emerald-900">Bảo đảm an toàn tracking: </span>
-              Endpoint <code className="bg-emerald-100/70 text-emerald-900 px-1 py-0.5 rounded font-mono">prod-analytics.matryoshka.com</code> đã bị gỡ bỏ hoàn toàn. Các thay đổi của bạn dưới đây sẽ được tiêm trực tiếp vào mã nguồn sạch.
+              {analyticsEnabled
+                ? 'Playable này có module analytics đang hoạt động (send() có nội dung) — có thể gửi dữ liệu ra ngoài.'
+                : 'Không phát hiện analytics gửi dữ liệu ra ngoài. Link mới được thay vào mọi chỗ link store gốc xuất hiện.'}
+              <div className="mt-1 text-slate-500">Bản Mintegral dùng link của campaign khi gọi install(), link trong file chỉ dùng cho AppLovin/MRAID.</div>
             </div>
           </div>
 
@@ -142,7 +123,7 @@ export default function ConfigModal({
               type="text"
               value={formConfig.gameTitle}
               onChange={(e) => setFormConfig({ ...formConfig, gameTitle: e.target.value })}
-              placeholder="VD: Royal Cooking: Kitchen Madness"
+              placeholder={original.gameTitle || "Tên game của bạn"}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-hidden transition-all bg-white font-medium"
             />
             <p className="text-[11px] text-slate-500">
@@ -255,41 +236,11 @@ export default function ConfigModal({
             </div>
           )}
 
-          {/* Quick Presets */}
-          <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/80 space-y-2">
-            <div className="font-semibold text-slate-700 text-[11px]">
-              Gợi ý mẫu thiết lập nhanh:
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                onClick={handleResetToDefault}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Mặc định Royal Cooking
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplyPreset('appsflyer')}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Mẫu AppsFlyer OneLink
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplyPreset('adjust')}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-lg border border-slate-200 text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Mẫu Adjust Tracker
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplyPreset('blank')}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-rose-600 rounded-lg border border-slate-200 text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Xoá trống link
-              </button>
-            </div>
+          {/* Original links detected in the file */}
+          <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/80 space-y-1 text-[11px] text-slate-500">
+            <div className="font-semibold text-slate-700">Link gốc trong file:</div>
+            <div className="truncate font-mono" title={original.iosStoreUrl}>iOS: {original.iosStoreUrl || '—'}</div>
+            <div className="truncate font-mono" title={original.androidStoreUrl}>Android: {original.androidStoreUrl || '—'}</div>
           </div>
         </form>
 
@@ -302,7 +253,7 @@ export default function ConfigModal({
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer font-medium"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Khôi phục mặc định</span>
+            <span>Khôi phục link gốc</span>
           </button>
 
           <div className="flex items-center gap-2">

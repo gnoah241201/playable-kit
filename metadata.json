@@ -1,6 +1,6 @@
 {
-  "name": "Royal Cooking Playable",
-  "description": "Bản playable game Royal Cooking sạch tracking prod-analytics, hỗ trợ tùy chỉnh tên game và link store iOS / Android trực tiếp.",
+  "name": "Playable Kit",
+  "description": "Công cụ đổi link store, thay asset và xuất playable ads cho AppLovin (MRAID) và Mintegral, chạy hoàn toàn trên trình duyệt.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
