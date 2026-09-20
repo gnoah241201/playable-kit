@@ -57,6 +57,40 @@ export async function readPlayableFile(file: File): Promise<string> {
   return new TextDecoder().decode(buf);
 }
 
+export interface ImportReport {
+  replaced: string[]; unmatched: string[]; ambiguous: string[]; opaqueSprites: string[]; failed: string[];
+}
+
+const EXPORT_README = `Asset export - Playable Kit
+
+Cấu trúc:
+  images/   ảnh lẻ (nền, nút, hộp...)
+  sounds/   âm thanh mp3
+  sprites/<sheet>/<khung>.png   từng khung spritesheet, đúng kích thước game hiển thị
+  manifest.json   danh sách file + kích thước gốc (width x height)
+
+Gen lại bằng AI:
+  - GIỮ NGUYÊN tên file và thư mục (đổi đuôi .png -> .webp/.jpg vẫn được nhận).
+  - Sprite cần nền TRONG SUỐT (PNG/WebP có alpha). Ảnh có nền đặc sẽ bị cảnh báo.
+  - Nên giữ đúng tỉ lệ khung; khác kích thước sẽ được tự co vừa kích thước gốc (giữ tỉ lệ, căn giữa).
+  - Chỉ cần đưa lại những file đã gen, không cần đủ bộ.
+
+Nạp lại: trong "Thay asset" bấm "Nạp lại hàng loạt" và chọn file .zip (hoặc nhiều ảnh cùng lúc).
+`;
+
+/** True if any pixel is not fully opaque (sampled on a downscaled copy for speed). */
+function imageHasTransparency(img: ImageBitmap): boolean {
+  const s = Math.min(1, 256 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(img.width * s));
+  c.height = Math.max(1, Math.round(img.height * s));
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+  return false;
+}
+
 function fitCanvas(img: ImageBitmap, w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = w;
@@ -149,13 +183,14 @@ export class PlayableProject {
   }
 
   /** Replace a standalone asset. Images are fitted into the original pixel size so layout does not change. */
-  async replaceLoose(id: string, file: File): Promise<void> {
+  async replaceLoose(id: string, file: Blob, name = (file as File).name ?? ''): Promise<void> {
     const a = this.loose.find((x) => x.id === id);
     if (!a) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const mime = file.type || mimeFromName(name, a.mime);
     if (a.mime.startsWith('image/') && a.width && a.height) {
-      const bmp = await decodeImage(bytes, file.type || mimeFromName(file.name, a.mime));
-      if (bmp.width === a.width && bmp.height === a.height && (file.type || mimeFromName(file.name)) === a.mime) {
+      const bmp = await decodeImage(bytes, mime);
+      if (bmp.width === a.width && bmp.height === a.height && mime === a.mime) {
         a.uri = dataUri(a.mime, bytes);
       } else {
         const c = fitCanvas(bmp, a.width, a.height);
@@ -164,21 +199,121 @@ export class PlayableProject {
       }
       bmp.close();
     } else {
-      a.uri = dataUri(file.type || mimeFromName(file.name, a.mime), bytes);
+      a.uri = dataUri(mime, bytes);
     }
     a.replaced = true;
   }
 
-  async replaceFrame(id: string, file: File): Promise<void> {
+  /** Replace a spritesheet frame. Returns false if the new image has no transparency (likely a solid background). */
+  async replaceFrame(id: string, file: Blob, name = (file as File).name ?? ''): Promise<boolean> {
     for (const sh of this.sheets) {
       const f = sh.frames.find((x) => x.id === id);
       if (!f) continue;
-      const bmp = await decodeImage(new Uint8Array(await file.arrayBuffer()), file.type || mimeFromName(file.name, 'image/png'));
+      const bmp = await decodeImage(new Uint8Array(await file.arrayBuffer()), file.type || mimeFromName(name, 'image/png'));
+      const hasAlpha = imageHasTransparency(bmp);
       f.canvas = fitCanvas(bmp, f.width, f.height);
       bmp.close();
       f.thumb = f.canvas.toDataURL('image/png');
       f.replaced = true;
+      return hasAlpha;
     }
+    return true;
+  }
+
+  // ---------------------------------------------------------------- bulk export / import (AI re-generation)
+
+  /** Stable path of an asset inside an exported zip, e.g. images/back.jpg, sprites/food/broccoli_0.png */
+  pathOf(id: string): string | null {
+    const a = this.loose.find((x) => x.id === id);
+    if (a) return `${a.mime.startsWith('image/') ? 'images' : 'sounds'}/${a.name}`;
+    for (const sh of this.sheets) {
+      const f = sh.frames.find((x) => x.id === id);
+      if (f) return `sprites/${sh.key}/${f.label.replace(/[<>:"\\|?*]/g, '_')}.png`;
+    }
+    return null;
+  }
+
+  allIds(): string[] {
+    return [...this.loose.map((a) => a.id), ...this.sheets.flatMap((sh) => sh.frames.map((f) => f.id))];
+  }
+
+  /** Zip of the current version of the given assets (default: all) + manifest.json + README.txt. */
+  exportAssets(ids: string[] = this.allIds()): Uint8Array {
+    const files: Record<string, Uint8Array> = {};
+    const manifest: any[] = [];
+    for (const id of ids) {
+      const path = this.pathOf(id);
+      if (!path) continue;
+      const a = this.loose.find((x) => x.id === id);
+      if (a) {
+        files[path] = dataUriBytes(a.uri);
+        manifest.push({ path, type: a.mime.startsWith('image/') ? 'image' : 'sound', width: a.width, height: a.height, replaced: a.replaced });
+        continue;
+      }
+      for (const sh of this.sheets) {
+        const f = sh.frames.find((x) => x.id === id);
+        if (!f) continue;
+        files[path] = dataUriBytes(f.canvas.toDataURL('image/png'));
+        manifest.push({ path, type: 'sprite', sheet: sh.key, frame: f.frameName, width: f.width, height: f.height, transparent: true, replaced: f.replaced });
+      }
+    }
+    files['manifest.json'] = strToU8(JSON.stringify({ source: this.info.fileName, count: manifest.length, assets: manifest }, null, 2));
+    files['README.txt'] = strToU8(EXPORT_README);
+    return zipSync(files, { level: 6 });
+  }
+
+  /**
+   * Replace assets from a batch of files (a zip exported by exportAssets, or loose images/sounds).
+   * Matching: exact path first, then unique file name (extension may differ, e.g. .png -> .webp).
+   */
+  async importAssets(input: File[]): Promise<ImportReport> {
+    const entries: { name: string; blob: Blob }[] = [];
+    for (const file of input) {
+      if (/\.zip$/i.test(file.name)) {
+        const unz = unzipSync(new Uint8Array(await file.arrayBuffer()));
+        for (const [n, bytes] of Object.entries(unz)) {
+          if (n.endsWith('/') || /(^|\/)(manifest\.json|README\.txt|__MACOSX\/.*|\.DS_Store)$/i.test(n)) continue;
+          entries.push({ name: n, blob: new Blob([bytes as BlobPart], { type: mimeFromName(n, '') }) });
+        }
+      } else {
+        entries.push({ name: (file as any).webkitRelativePath || file.name, blob: file });
+      }
+    }
+    const byPath = new Map<string, string>();
+    const byStem = new Map<string, string[]>();
+    const stem = (p: string) => p.split('/').pop()!.replace(/\.[^.]+$/, '').toLowerCase();
+    for (const id of this.allIds()) {
+      const p = this.pathOf(id)!;
+      byPath.set(p.toLowerCase(), id);
+      byStem.set(stem(p), [...(byStem.get(stem(p)) ?? []), id]);
+    }
+    const report: ImportReport = { replaced: [], unmatched: [], ambiguous: [], opaqueSprites: [], failed: [] };
+    for (const e of entries) {
+      const norm = e.name.replace(/\\/g, '/').toLowerCase();
+      // accept an extra top folder (e.g. "mygame_assets/sprites/food/x.png") and a changed extension
+      let id = byPath.get(norm) ?? [...byPath.entries()].find(([p]) => norm.endsWith('/' + p))?.[1];
+      if (!id) {
+        const noExt = norm.replace(/\.[^./]+$/, '');
+        id = [...byPath.entries()].find(([p]) => p.replace(/\.[^./]+$/, '') === noExt || noExt.endsWith('/' + p.replace(/\.[^./]+$/, '')))?.[1];
+      }
+      if (!id) {
+        const c = byStem.get(stem(norm)) ?? [];
+        if (c.length === 1) id = c[0];
+        else if (c.length > 1) { report.ambiguous.push(e.name); continue; }
+      }
+      if (!id) { report.unmatched.push(e.name); continue; }
+      try {
+        if (id.startsWith('sprite:')) {
+          if (!(await this.replaceFrame(id, e.blob, e.name))) report.opaqueSprites.push(this.pathOf(id)!);
+        } else {
+          await this.replaceLoose(id, e.blob, e.name);
+        }
+        report.replaced.push(this.pathOf(id)!);
+      } catch (err) {
+        report.failed.push(`${e.name}: ${(err as Error).message}`);
+      }
+    }
+    return report;
   }
 
   reset(id: string) {
