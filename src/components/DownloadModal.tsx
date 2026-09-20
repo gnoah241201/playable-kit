@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { X, Download, FileCode, Code2, Check, FileText, Package, ShieldCheck, AlertTriangle, XCircle, CheckCircle2 } from 'lucide-react';
-import { PlayableConfig } from '../types';
+import { PlayableConfig, CompressMode } from '../types';
 import { slugifyTitle, triggerDownload, generateAppLovinJs, generateAppLovinHtml } from '../utils/playableGenerator';
 import { PlayableProject, validate, Check as KitCheck } from '../kit/project';
 import { formatBytes } from '../kit/bytes';
@@ -11,6 +11,8 @@ interface DownloadModalProps {
   config: PlayableConfig;
   project: PlayableProject;
   builtHtml: string;
+  building: boolean;
+  onCompressChange: (mode: CompressMode) => void;
 }
 
 function CheckList({ checks }: { checks: KitCheck[] }) {
@@ -28,7 +30,7 @@ function CheckList({ checks }: { checks: KitCheck[] }) {
   );
 }
 
-export default function DownloadModal({ isOpen, onClose, config, project, builtHtml }: DownloadModalProps) {
+export default function DownloadModal({ isOpen, onClose, config, project, builtHtml, building, onCompressChange }: DownloadModalProps) {
   const [downloaded, setDownloaded] = useState<string | null>(null);
   const baseSlug = slugifyTitle(config.gameTitle || project.info.title || project.info.fileName.replace(/\.\w+$/, ''));
 
@@ -74,12 +76,12 @@ export default function DownloadModal({ isOpen, onClose, config, project, builtH
       : []),
     {
       key: 'js', icon: <Code2 className="w-4 h-4" />, name: `${baseSlug}_applovin.js`, tag: null,
-      desc: 'Gói JS AppLovin (al_renderHtml) để upload trực tiếp.', checks: null,
+      desc: 'Gói JS AppLovin (al_renderHtml) — dùng khi ô upload của AppLovin yêu cầu đúng định dạng JS.', checks: null,
       run: () => triggerDownload(generateAppLovinJs(builtHtml), `${baseSlug}_applovin.js`, 'text/javascript;charset=utf-8'),
     },
     {
       key: 'loader', icon: <FileText className="w-4 h-4" />, name: `${baseSlug}_applovin.html`, tag: null,
-      desc: 'HTML wrapper kèm loader al_renderHtml để test cục bộ.', checks: null,
+      desc: 'CHỈ để mở thử bằng trình duyệt xem gói JS ở trên có chạy không. Đừng upload lên mạng quảng cáo: nội dung y hệt bản .html nhưng khởi động chậm hơn (~0.8s) vì phải document.write lại toàn bộ.', checks: null,
       run: () => triggerDownload(generateAppLovinHtml(builtHtml, config.gameTitle || baseSlug), `${baseSlug}_applovin.html`, 'text/html;charset=utf-8'),
     },
   ];
@@ -105,6 +107,29 @@ export default function DownloadModal({ isOpen, onClose, config, project, builtH
         </div>
 
         <div className="p-6 overflow-y-auto space-y-2.5 text-xs">
+          {/* asset compression */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="font-semibold text-slate-700">Nén asset khi xuất file</div>
+              <div className="flex items-center bg-white p-0.5 rounded-xl border border-slate-200 text-[11px]">
+                {([
+                  ['none', 'Không nén'],
+                  ['webp-hq', 'WebP chất lượng cao'],
+                  ['webp', 'WebP nhẹ nhất'],
+                ] as [CompressMode, string][]).map(([m, label]) => (
+                  <button key={m} id={`compress-${m}-btn`} onClick={() => onCompressChange(m)} disabled={building}
+                    className={`px-2.5 py-1 rounded-lg font-medium cursor-pointer disabled:opacity-50 ${config.compress === m ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              {building ? 'Đang nén lại asset…' : config.compress === 'none'
+                ? 'Giữ nguyên ảnh gốc. Chọn WebP để file nhẹ hơn, tải nhanh hơn (WebP cần iOS 14 trở lên).'
+                : `Ảnh được chuyển sang WebP (chất lượng ${config.compress === 'webp' ? '85' : '95'}%). Gốc ${formatBytes(project.info.bytes)} → hiện tại ${formatBytes(outputs.htmlBytes)}.`}
+            </p>
+          </div>
           {!project.info.mintegralSupported && (
             <div className="flex items-start gap-2 rounded-xl p-3 border border-amber-200 bg-amber-50 text-amber-800 text-[11px]">
               <ShieldCheck className="w-4 h-4 shrink-0" />

@@ -16,13 +16,14 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { PlayableConfig } from '../types';
+import { AnalyticsState } from '../kit/project';
 
 interface ConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: PlayableConfig;
   original: PlayableConfig;
-  analyticsEnabled: boolean | null;
+  analytics: AnalyticsState;
   onSave: (newConfig: PlayableConfig) => void;
 }
 
@@ -31,7 +32,7 @@ export default function ConfigModal({
   onClose,
   config,
   original,
-  analyticsEnabled,
+  analytics,
   onSave,
 }: ConfigModalProps) {
   const [formConfig, setFormConfig] = useState<PlayableConfig>(config);
@@ -96,15 +97,34 @@ export default function ConfigModal({
 
         {/* Body Content */}
         <form onSubmit={handleSave} className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
-          {/* Analytics status (from inspect) */}
-          <div className={`flex items-start gap-2.5 rounded-xl p-3 border ${analyticsEnabled ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
-            <ShieldCheck className={`w-4 h-4 shrink-0 mt-0.5 ${analyticsEnabled ? 'text-rose-600' : 'text-emerald-600'}`} />
-            <div className="text-[11px] leading-relaxed">
-              {analyticsEnabled
-                ? 'Playable này có module analytics đang hoạt động (send() có nội dung) — có thể gửi dữ liệu ra ngoài.'
-                : 'Không phát hiện analytics gửi dữ liệu ra ngoài. Link mới được thay vào mọi chỗ link store gốc xuất hiện.'}
-              <div className="mt-1 text-slate-500">Bản Mintegral dùng link của campaign khi gọi install(), link trong file chỉ dùng cho AppLovin/MRAID.</div>
+          {/* Analytics status (from inspect) + strip toggle */}
+          <div className={`rounded-xl p-3 border ${analytics === 'active' && !formConfig.disableAnalytics ? 'bg-rose-50 border-rose-200 text-rose-800'
+            : analytics === 'gated-off' && !formConfig.disableAnalytics ? 'bg-amber-50 border-amber-200 text-amber-800'
+            : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+            <div className="flex items-start gap-2.5">
+              <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="text-[11px] leading-relaxed">
+                {{
+                  none: 'Không có module analytics trong file.',
+                  stripped: 'Module analytics đã bị gỡ sẵn trong file.',
+                  'gated-off': 'Có module analytics nhưng đang bị khoá bằng cờ applicationSettings.analytics = false, nên không gửi gì. Code và endpoint vẫn còn trong file.',
+                  active: 'Module analytics đang hoạt động — playable có thể gửi dữ liệu ra ngoài.',
+                }[analytics]}
+                <div className="mt-1 text-slate-500">Bản Mintegral dùng link của campaign khi gọi install(), link trong file chỉ dùng cho AppLovin/MRAID.</div>
+              </div>
             </div>
+            {(analytics === 'active' || analytics === 'gated-off') && (
+              <label className="mt-2.5 flex items-center gap-2 cursor-pointer text-[11px] font-semibold text-slate-700 bg-white/70 rounded-lg px-2.5 py-1.5 border border-slate-200">
+                <input
+                  id="disable-analytics-toggle"
+                  type="checkbox"
+                  checked={formConfig.disableAnalytics}
+                  onChange={(e) => setFormConfig({ ...formConfig, disableAnalytics: e.target.checked })}
+                  className="accent-amber-500"
+                />
+                Tắt analytics khi xuất file (xoá thân hàm send() và endpoint)
+              </label>
+            )}
           </div>
 
           {/* Game Title Input */}

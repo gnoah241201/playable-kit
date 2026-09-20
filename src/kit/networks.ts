@@ -7,6 +7,10 @@ export type Network = 'applovin' | 'mintegral';
 const BOOTSTRAP_RE = /<script[^>]*>\s*window\.onload=function\(\)\{[\s\S]*?<\/script>/;
 const PIXI_STORE_RE = /isIOS\?"([^"]+)":"([^"]+)"/;
 const LUNA_STORE_RE = /iosLink:"([^"]*)",androidLink:"([^"]*)"/;
+// last resort: any store URL anywhere in the file (works for engines we do not know)
+const URL_STOP = '[^\\s"\'`\\\\<>)]+';
+const ANY_IOS_RE = new RegExp('https://(?:apps|itunes)\\.apple\\.com/' + URL_STOP);
+const ANY_ANDROID_RE = new RegExp('https://play\\.google\\.com/store/apps/' + URL_STOP);
 const AD_NETWORK_RE = /adNetwork:"([^"]*)"/;
 
 export const MINTEGRAL_BRIDGE =
@@ -37,7 +41,10 @@ export interface StoreLinks { ios: string; android: string }
 
 export function getStoreLinks(html: string): StoreLinks | null {
   const m = PIXI_STORE_RE.exec(html) ?? LUNA_STORE_RE.exec(html);
-  return m ? { ios: m[1], android: m[2] } : null;
+  if (m) return { ios: m[1], android: m[2] };
+  const ios = ANY_IOS_RE.exec(html)?.[0] ?? '';
+  const android = ANY_ANDROID_RE.exec(html)?.[0] ?? '';
+  return ios || android ? { ios, android } : null;
 }
 
 /** Replace every occurrence of the original links (bootstrap + anywhere else they appear). */
@@ -59,20 +66,51 @@ export class ConversionError extends Error {
   code = 'conversion_error';
 }
 
-export function canConvertToMintegral(html: string): boolean {
+/** The tailored bridge only fits the known template; everything else gets the generic MRAID shim. */
+function hasKnownBootstrap(html: string): boolean {
   const m = BOOTSTRAP_RE.exec(html);
-  return detectNetwork(html) === 'mintegral' || (!!m && /mraid/.test(m[0]) && /window\.application/.test(m[0]));
+  return !!m && /mraid/.test(m[0]) && /window\.application/.test(m[0]);
+}
+
+export function canConvertToMintegral(html: string): boolean {
+  return detectNetwork(html) === 'mintegral' || hasKnownBootstrap(html) || /mraid/.test(html);
 }
 
 export function toMintegral(html: string): string {
   if (detectNetwork(html) === 'mintegral') return html;
-  const m = BOOTSTRAP_RE.exec(html);
-  if (!m || !/mraid/.test(m[0]) || !/window\.application/.test(m[0])) {
-    throw new ConversionError('Không tìm thấy đoạn khởi động MRAID quen thuộc — không thể chuyển sang Mintegral.');
+  let out: string;
+  if (hasKnownBootstrap(html)) {
+    const m = BOOTSTRAP_RE.exec(html)!;
+    out = html.slice(0, m.index) + MINTEGRAL_BRIDGE + html.slice(m.index + m[0].length);
+  } else if (/mraid/.test(html)) {
+    // generic: keep the game untouched and shim MRAID so its own CTA drives the Mintegral SDK
+    out = /<head[^>]*>/i.test(html)
+      ? html.replace(/<head[^>]*>/i, (h) => h + MINTEGRAL_SHIM)
+      : MINTEGRAL_SHIM + html;
+  } else {
+    throw new ConversionError('Playable này không dùng MRAID nên chưa chuyển sang Mintegral tự động được.');
   }
-  let out = html.slice(0, m.index) + MINTEGRAL_BRIDGE + html.slice(m.index + m[0].length);
   out = out.replace(',window.is_applovin=!0', '').replace('window.is_applovin=!0', '');
   return out.replace(AD_NETWORK_RE, 'adNetwork:"mintegral"');
 }
+
+/**
+ * Engine-agnostic bridge: the playable keeps using MRAID, we translate it to the Mintegral SDK.
+ * Injected before the game's own scripts so `typeof mraid` is defined when they run.
+ */
+export const MINTEGRAL_SHIM =
+  '<script>(function(){var ended=false;' +
+  'function end(){if(!ended){ended=true;window.gameEnd&&window.gameEnd();}}' +
+  'window.gameStart=function(){try{window.dispatchEvent(new Event("mtg:start"));}catch(e){}};' +
+  'window.gameClose=function(){try{window.dispatchEvent(new Event("mtg:close"));}catch(e){}};' +
+  'var L={};window.mraid={getState:function(){return"default"},isViewable:function(){return true},' +
+  'getVersion:function(){return"3.0"},getPlacementType:function(){return"interstitial"},' +
+  'addEventListener:function(e,f){(L[e]=L[e]||[]).push(f);if(e==="ready")setTimeout(f,0);},' +
+  'removeEventListener:function(e,f){(L[e]||[]).splice((L[e]||[]).indexOf(f),1);},' +
+  'open:function(u){end();window.install&&window.install();},close:function(){},' +
+  'expand:function(){},useCustomClose:function(){},setOrientationProperties:function(){}};' +
+  'window.open=function(u){end();window.install&&window.install();return null;};' +
+  'window.addEventListener("load",function(){setTimeout(function(){window.gameReady&&window.gameReady();},50);});' +
+  '})();</script>';
 
 export const SIZE_LIMIT_MB: Record<Network, number> = { applovin: 5, mintegral: 5 };

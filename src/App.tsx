@@ -17,7 +17,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { PlayableConfig, EMPTY_CONFIG, DeviceMode } from './types';
-import { PlayableProject, readPlayableFile } from './kit/project';
+import { PlayableProject, readPlayableFile, externalUrls } from './kit/project';
 import { toMintegral } from './kit/networks';
 import { withPreviewHooks, PreviewMode, PreviewEvent } from './kit/preview';
 import { formatBytes } from './kit/bytes';
@@ -35,10 +35,11 @@ export default function App() {
   const [assetsVersion, setAssetsVersion] = useState(0);
   const [builtHtml, setBuiltHtml] = useState('');
   const [buildError, setBuildError] = useState<string | null>(null);
+  const [building, setBuilding] = useState(false);
 
   const [deviceMode, setDeviceMode] = useState<DeviceMode>('portrait');
   const [previewMode, setPreviewMode] = useState<PreviewMode>('applovin');
-  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewDoc, setPreviewDoc] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [events, setEvents] = useState<PreviewEvent[]>([]);
 
@@ -64,6 +65,8 @@ export default function App() {
         iosStoreUrl: p.info.storeLinks?.ios ?? '',
         androidStoreUrl: p.info.storeLinks?.android ?? '',
         syncLinks: false,
+        disableAnalytics: false,
+        compress: 'none',
       };
       setProject(p);
       setOriginal(orig);
@@ -86,18 +89,26 @@ export default function App() {
   // 2. Rebuild whenever config or assets change
   useEffect(() => {
     if (!project) return;
-    const id = setTimeout(() => {
+    let cancelled = false;
+    setBuilding(true);
+    const id = setTimeout(async () => {
       try {
-        setBuiltHtml(project.build({ title: config.gameTitle, ...links }));
-        setBuildError(null);
+        const html = await project.build({
+          title: config.gameTitle, ...links,
+          disableAnalytics: config.disableAnalytics, compress: config.compress,
+        });
+        if (!cancelled) { setBuiltHtml(html); setBuildError(null); }
       } catch (e) {
-        setBuildError((e as Error).message);
+        if (!cancelled) setBuildError((e as Error).message);
+      } finally {
+        if (!cancelled) setBuilding(false);
       }
     }, 0);
-    return () => clearTimeout(id);
-  }, [project, config.gameTitle, links, assetsVersion]);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [project, config.gameTitle, links, config.disableAnalytics, config.compress, assetsVersion]);
 
-  // 3. Instrumented preview (mock SDK) served from a blob URL
+  // 3. Instrumented preview (mock SDK). srcdoc keeps a normal base URL: a blob: document makes
+  //    playables that resolve asset paths against the document fail to find their inline assets.
   useEffect(() => {
     if (!builtHtml) return;
     let html = builtHtml;
@@ -109,10 +120,8 @@ export default function App() {
         return;
       }
     }
-    const url = URL.createObjectURL(new Blob([withPreviewHooks(html, previewMode)], { type: 'text/html' }));
-    setPreviewUrl(url);
+    setPreviewDoc(withPreviewHooks(html, previewMode));
     setEvents([]);
-    return () => URL.revokeObjectURL(url);
   }, [builtHtml, previewMode, reloadKey]);
 
   // 4. SDK / CTA calls reported by the preview iframe
@@ -126,6 +135,16 @@ export default function App() {
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, [showToast]);
+
+  // a written-into about:blank tab keeps the same base-URL behaviour as srcdoc
+  const openPreviewTab = () => {
+    if (!previewDoc) return;
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Trình duyệt chặn cửa sổ mới'); return; }
+    w.document.open();
+    w.document.write(previewDoc);
+    w.document.close();
+  };
 
   const handleSaveConfig = (newConfig: PlayableConfig) => {
     setConfig(newConfig);
@@ -142,7 +161,8 @@ export default function App() {
     config.gameTitle !== original.gameTitle ||
     config.iosStoreUrl !== original.iosStoreUrl ||
     config.androidStoreUrl !== original.androidStoreUrl ||
-    config.syncLinks !== original.syncLinks;
+    config.syncLinks !== original.syncLinks ||
+    config.disableAnalytics !== original.disableAnalytics;
 
   const getContainerDimensions = () => {
     switch (deviceMode) {
@@ -159,12 +179,15 @@ export default function App() {
   };
 
   const info = project?.info;
+  // recomputed on the built output, so stripping analytics clears its warning too
+  const outputUrls = useMemo(() => (builtHtml ? externalUrls(builtHtml) : info?.externalUrls ?? []), [builtHtml, info]);
   const warnings: string[] = [];
   if (info) {
-    if (info.analyticsEnabled) warnings.push('Module analytics đang hoạt động — playable có thể gửi dữ liệu ra ngoài.');
-    if (info.externalUrls.length) warnings.push(`Có ${info.externalUrls.length} URL ngoài link store: ${info.externalUrls.slice(0, 2).join(', ')}`);
+    if (info.analytics === 'active' && !config.disableAnalytics) warnings.push('Module analytics đang hoạt động — playable có thể gửi dữ liệu ra ngoài. Bật "Tắt analytics" trong Store & Tên game để gỡ.');
+    if (outputUrls.length) warnings.push(`Có ${outputUrls.length} URL ngoài link store: ${outputUrls.slice(0, 2).join(', ')}`);
     if (!info.storeLinks) warnings.push('Không tìm thấy link store trong file — không đổi link được.');
     if (!info.assetsSupported && info.assetsReason) warnings.push(`Không thay asset được: ${info.assetsReason}`);
+    else if (info.assetMode === 'inline' && info.assetsReason) warnings.push(info.assetsReason);
     if (buildError) warnings.push(`Lỗi build: ${buildError}`);
   }
 
@@ -208,9 +231,12 @@ export default function App() {
                   Đã tùy biến{project.replacedCount ? ` · ${project.replacedCount} asset` : ''}
                 </span>
               )}
-              <span className={`hidden md:inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${info!.analyticsEnabled ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>
+<span className={`hidden md:inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                info!.analytics === 'active' && !config.disableAnalytics ? 'bg-rose-100 text-rose-800 border-rose-200'
+                  : info!.analytics === 'gated-off' ? 'bg-amber-100 text-amber-800 border-amber-200'
+                  : 'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>
                 <ShieldCheck className="w-3 h-3" />
-                {info!.analyticsEnabled ? 'Có analytics' : 'Không tracking'}
+                {config.disableAnalytics ? 'Analytics đã gỡ' : { active: 'Có analytics', 'gated-off': 'Analytics tắt bằng cờ', stripped: 'Không tracking', none: 'Không tracking' }[info!.analytics]}
               </span>
             </div>
             <p className="text-xs text-slate-500 hidden sm:block">
@@ -237,7 +263,7 @@ export default function App() {
             <RotateCcw className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Khởi động lại</span>
           </button>
-          <button id="open-tab-btn" onClick={() => previewUrl && window.open(previewUrl, '_blank')}
+          <button id="open-tab-btn" onClick={() => openPreviewTab()}
             className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer" title="Mở bản xem trước trong tab mới">
             <ExternalLink className="w-3.5 h-3.5" />
             <span className="hidden md:inline">Mở tab mới</span>
@@ -297,11 +323,11 @@ export default function App() {
 
       <main id="game-stage" className="flex-1 flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden bg-slate-200/50 relative">
         <div className={`transition-all duration-300 ease-out overflow-hidden relative bg-black flex items-center justify-center ${getContainerDimensions()}`}>
-          {previewUrl && (
+          {previewDoc && (
             <iframe
-              key={previewUrl}
+              key={`${previewMode}-${reloadKey}-${previewDoc.length}`}
               id="playable-game-iframe"
-              src={previewUrl}
+              srcDoc={previewDoc}
               title="Playable preview"
               className="w-full h-full border-0 block bg-black"
               allow="autoplay; fullscreen"
@@ -326,7 +352,7 @@ export default function App() {
         onClose={() => setIsConfigModalOpen(false)}
         config={config}
         original={original}
-        analyticsEnabled={info!.analyticsEnabled}
+        analytics={info!.analytics}
         onSave={handleSaveConfig}
       />
       <AssetsModal
@@ -341,6 +367,8 @@ export default function App() {
         config={config}
         project={project}
         builtHtml={builtHtml}
+        building={building}
+        onCompressChange={(compress) => setConfig((c) => ({ ...c, compress }))}
       />
     </div>
   );

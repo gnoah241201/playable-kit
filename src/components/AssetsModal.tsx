@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  X, Image as ImageIcon, Music, Layers, RotateCcw, Upload, Check, Search, Download, PackageOpen, CheckSquare, Square, AlertTriangle,
+  X, Image as ImageIcon, Music, Layers, RotateCcw, Upload, Check, Search, Download, PackageOpen, CheckSquare, Square, AlertTriangle, FileJson,
 } from 'lucide-react';
 import { PlayableProject, ImportReport } from '../kit/project';
 import { dataUriBytes, formatBytes } from '../kit/bytes';
@@ -13,7 +13,7 @@ interface AssetsModalProps {
   onChanged: (message: string) => void;
 }
 
-type Tab = 'images' | 'sounds' | 'sprites';
+type Tab = 'images' | 'sounds' | 'data' | 'sprites';
 
 export default function AssetsModal({ isOpen, onClose, project, onChanged }: AssetsModalProps) {
   const [tab, setTab] = useState<Tab>('sprites');
@@ -27,7 +27,8 @@ export default function AssetsModal({ isOpen, onClose, project, onChanged }: Ass
   const pending = useRef<{ id: string; sprite: boolean } | null>(null);
 
   const images = project.loose.filter((a) => a.mime.startsWith('image/'));
-  const sounds = project.loose.filter((a) => !a.mime.startsWith('image/'));
+  const sounds = project.loose.filter((a) => a.mime.startsWith('audio/'));
+  const data = project.loose.filter((a) => !a.mime.startsWith('image/') && !a.mime.startsWith('audio/'));
   const q = query.trim().toLowerCase();
   const sheets = useMemo(
     () => project.sheets.map((s) => ({ ...s, frames: s.frames.filter((f) => !q || f.label.toLowerCase().includes(q)) }))
@@ -39,7 +40,8 @@ export default function AssetsModal({ isOpen, onClose, project, onChanged }: Ass
   if (!isOpen) return null;
 
   const tabIds = (): string[] =>
-    tab === 'sprites' ? sheets.flatMap((s) => s.frames.map((f) => f.id)) : (tab === 'images' ? images : sounds).map((a) => a.id);
+    tab === 'sprites' ? sheets.flatMap((s) => s.frames.map((f) => f.id))
+      : (tab === 'images' ? images : tab === 'sounds' ? sounds : data).map((a) => a.id);
 
   const toggle = (id: string) => setSelected((prev) => {
     const next = new Set(prev);
@@ -113,6 +115,7 @@ export default function AssetsModal({ isOpen, onClose, project, onChanged }: Ass
     { id: 'sprites', label: 'Spritesheet', icon: <Layers className="w-3.5 h-3.5" />, count: project.sheets.reduce((s, x) => s + x.frames.length, 0) },
     { id: 'images', label: 'Ảnh', icon: <ImageIcon className="w-3.5 h-3.5" />, count: images.length },
     { id: 'sounds', label: 'Âm thanh', icon: <Music className="w-3.5 h-3.5" />, count: sounds.length },
+    ...(data.length ? [{ id: 'data' as Tab, label: 'Spine / Atlas', icon: <FileJson className="w-3.5 h-3.5" />, count: data.length }] : []),
   ];
 
   const SelectBox = ({ id }: { id: string }) => (
@@ -276,6 +279,23 @@ export default function AssetsModal({ isOpen, onClose, project, onChanged }: Ass
                   <audio controls src={a.uri} className="h-8 flex-1 min-w-0" />
                   <span className="text-[10px] text-slate-400 w-16 text-right">{formatBytes(dataUriBytes(a.uri).length)}</span>
                   <ReplaceButtons id={a.id} replaced={a.replaced} sprite={false} accept="audio/*" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tab === 'data' && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-slate-500">
+                File dữ liệu Spine (skeleton .json, .atlas.txt). Thay thì phải thay đồng bộ cả bộ, nếu không animation sẽ hỏng.
+              </p>
+              {data.map((a) => (
+                <div key={a.id} className={`rounded-xl border px-3 py-2 flex items-center gap-3 ${selected.has(a.id) ? 'ring-2 ring-amber-400' : ''} ${a.replaced ? 'border-amber-400 bg-amber-50/40' : 'border-slate-200'}`}>
+                  <SelectBox id={a.id} />
+                  <FileJson className="w-4 h-4 text-slate-400 shrink-0" />
+                  <div className="flex-1 min-w-0 truncate font-medium text-slate-700" title={a.name}>{a.kind}/{a.name}</div>
+                  <span className="text-[10px] text-slate-400 w-16 text-right">{formatBytes(dataUriBytes(a.uri).length)}</span>
+                  <ReplaceButtons id={a.id} replaced={a.replaced} sprite={false} accept=".json,.txt,.atlas" />
                 </div>
               ))}
             </div>

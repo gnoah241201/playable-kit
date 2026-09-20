@@ -17,8 +17,16 @@ export function slugifyTitle(title: string): string {
   return clean || 'playable_game';
 }
 
+/**
+ * JSON for embedding inside a <script> block. Every `<` becomes < so that a `</script>`
+ * inside the playable cannot close the surrounding script tag (that breaks the whole file).
+ */
+export function scriptSafeJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
 export function generateAppLovinJs(cleanHtml: string): string {
-  return `al_renderHtml(${JSON.stringify({ html: cleanHtml })});\n`;
+  return `al_renderHtml(${scriptSafeJson({ html: cleanHtml })});\n`;
 }
 
 export function generateAppLovinHtml(cleanHtml: string, title: string): string {
@@ -36,7 +44,7 @@ export function generateAppLovinHtml(cleanHtml: string, title: string): string {
     }
   </script>
   <script>
-    al_renderHtml(${JSON.stringify({ html: cleanHtml })});
+    al_renderHtml(${scriptSafeJson({ html: cleanHtml })});
   </script>
 </body>
 </html>`;
